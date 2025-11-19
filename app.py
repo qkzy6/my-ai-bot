@@ -3,6 +3,7 @@ import re
 import json # 虽然不用存文件了，但有时候处理数据还需要
 from openai import OpenAI
 import pymongo # 引入数据库库
+import certifi
 
 # --- 1. 基础配置 ---
 st.set_page_config(page_title="无限末日：云存档版", page_icon="☁️", layout="wide")
@@ -20,7 +21,10 @@ try:
     # ✨ 连接 MongoDB
     @st.cache_resource
     def init_connection():
-        return pymongo.MongoClient(st.secrets["MONGO_URI"])
+        return pymongo.MongoClient(
+            st.secrets["MONGO_URI"],
+            tlsCAFile=certifi.where()  # <--- 关键修改：强制指定证书路径
+        )
     
     mongo_client = init_connection()
     # 选择数据库和集合
@@ -295,3 +299,4 @@ if user_input := st.chat_input("输入你的选择..."):
             
             st.session_state.history.append(entry)
             st.rerun()
+
