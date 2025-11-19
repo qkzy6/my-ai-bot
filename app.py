@@ -7,10 +7,12 @@ st.set_page_config(page_title="无限末日：可调图片尺寸", page_icon="�
 
 # 获取 API Key
 try:
+    # Client A: DeepSeek (负责写剧情)
     client_story = OpenAI(
         api_key=st.secrets["DEEPSEEK_API_KEY"], 
-        base_base=st.secrets["DEEPSEEK_BASE_URL"]
+        base_url=st.secrets["DEEPSEEK_BASE_URL"]  # <---这里修正了！
     )
+    # Client B: AIHubMix (负责画图)
     client_image = OpenAI(
         api_key=st.secrets["AIHUBMIX_API_KEY"], 
         base_url=st.secrets["AIHUBMIX_BASE_URL"]
@@ -28,7 +30,7 @@ if "history" not in st.session_state:
     st.session_state.history = []
 # 初始化图片宽度设置
 if "image_width" not in st.session_state:
-    st.session_state.image_width = 700 # 默认宽度
+    st.session_state.image_width = 500 # 默认设小一点，500px比较合适
 
 # --- 3. 侧边栏 (新增图片宽度滑块) ---
 with st.sidebar:
@@ -51,7 +53,7 @@ with st.sidebar:
     # 图片尺寸调节滑块
     st.session_state.image_width = st.slider(
         "图片显示宽度 (px)",
-        min_value=300,
+        min_value=200,
         max_value=1000,
         value=st.session_state.image_width,
         step=50
@@ -107,7 +109,7 @@ def generate_dalle_image(prompt):
             response = client_image.images.generate(
                 model="dall-e-3",
                 prompt=prompt + ", apocalyptic style, cinematic lighting, 4k",
-                size="1024x1024", # DALL-E 3 生成尺寸是固定的，这里只是传参
+                size="1024x1024", 
                 quality="standard",
                 n=1,
             )
@@ -175,9 +177,8 @@ for msg in st.session_state.history:
             st.write(msg["content"])
     else:
         with st.chat_message("assistant"):
-            st.write(msg["content"])
+            st.write(msg["content"]) 
             if "image_url" in msg:
-                # 使用 st.session_state.image_width 来控制图片显示宽度
                 st.image(msg["image_url"], caption="当前场景", width=st.session_state.image_width)
 
 # 死亡判定
@@ -208,7 +209,7 @@ if user_input := st.chat_input("输入你的选择（如：1 / 搜刮便利店�
             st.write(text)
             entry = {"role": "assistant", "content": text}
             if img:
-                st.image(img, width=st.session_state.image_width) # 同样应用宽度
+                st.image(img, width=st.session_state.image_width)
                 entry["image_url"] = img
             
             st.session_state.history.append(entry)
