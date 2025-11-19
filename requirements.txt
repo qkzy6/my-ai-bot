@@ -3,3 +3,5 @@ streamlit
 openai
 pymongo
 dnspython
+certifi
+
