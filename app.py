@@ -1,22 +1,32 @@
 import streamlit as st
 import re
+import json # 虽然不用存文件了，但有时候处理数据还需要
 from openai import OpenAI
+import pymongo # 引入数据库库
 
 # --- 1. 基础配置 ---
-st.set_page_config(page_title="无限末日：可调图片尺寸", page_icon="🖼️", layout="wide")
+st.set_page_config(page_title="无限末日：云存档版", page_icon="☁️", layout="wide")
 
-# 获取 API Key
+# 获取 API Key 和 数据库连接串
 try:
-    # Client A: DeepSeek (负责写剧情)
     client_story = OpenAI(
         api_key=st.secrets["DEEPSEEK_API_KEY"], 
-        base_url=st.secrets["DEEPSEEK_BASE_URL"]  # <---这里修正了！
+        base_url=st.secrets["DEEPSEEK_BASE_URL"]
     )
-    # Client B: AIHubMix (负责画图)
     client_image = OpenAI(
         api_key=st.secrets["AIHUBMIX_API_KEY"], 
         base_url=st.secrets["AIHUBMIX_BASE_URL"]
     )
+    # ✨ 连接 MongoDB
+    @st.cache_resource
+    def init_connection():
+        return pymongo.MongoClient(st.secrets["MONGO_URI"])
+    
+    mongo_client = init_connection()
+    # 选择数据库和集合
+    db = mongo_client.zombie_game  # 数据库名叫 zombie_game
+    saves_collection = db.player_saves # 集合(表)名叫 player_saves
+
 except Exception as e:
     st.error(f"配置错误: {e}")
     st.stop()
@@ -28,14 +38,75 @@ if "inventory" not in st.session_state:
     st.session_state.inventory = ["破旧的衣服", "半瓶水"]
 if "history" not in st.session_state:
     st.session_state.history = []
-# 初始化图片宽度设置
 if "image_width" not in st.session_state:
-    st.session_state.image_width = 500 # 默认设小一点，500px比较合适
+    st.session_state.image_width = 500
+if "objective" not in st.session_state:
+    st.session_state.objective = "寻找线索"
+if "image_error" not in st.session_state:
+    st.session_state.image_error = None
+# ✨ 新增：当前玩家名字
+if "username" not in st.session_state:
+    st.session_state.username = "Player1"
 
-# --- 3. 侧边栏 (新增图片宽度滑块) ---
+# --- 3. 云存档/读档系统 (核心修改) ---
+
+def save_game_cloud():
+    user = st.session_state.username
+    if not user:
+        st.error("❌ 请先输入用户名！")
+        return
+
+    # 准备要保存的数据 (这就是一个文档)
+    data = {
+        "username": user,  # 作为唯一标识
+        "hp": st.session_state.hp,
+        "inventory": st.session_state.inventory,
+        "history": st.session_state.history,
+        "objective": st.session_state.objective
+    }
+    
+    try:
+        # ✨ update_one: 如果存在就更新，不存在就插入 (Upsert)
+        saves_collection.update_one(
+            {"username": user},  # 查询条件：找名字叫这个的
+            {"$set": data},      # 更新内容
+            upsert=True          # 如果没找到，就创建新的
+        )
+        st.toast(f"☁️ 成功保存到云端！(用户: {user})")
+    except Exception as e:
+        st.error(f"云端保存失败: {e}")
+
+def load_game_cloud():
+    user = st.session_state.username
+    if not user:
+        st.error("❌ 请先输入用户名！")
+        return
+
+    try:
+        # ✨ find_one: 去数据库里找
+        data = saves_collection.find_one({"username": user})
+        
+        if data:
+            st.session_state.hp = data["hp"]
+            st.session_state.inventory = data["inventory"]
+            st.session_state.history = data["history"]
+            st.session_state.objective = data.get("objective", "存活")
+            st.toast(f"☁️ 云存档读取成功！欢迎回来，{user}")
+            st.rerun()
+        else:
+            st.error(f"❌ 云端找不到用户 [{user}] 的存档，请检查拼写。")
+    except Exception as e:
+        st.error(f"读取失败: {e}")
+
+# --- 4. 侧边栏 UI ---
 with st.sidebar:
     st.title("🧟 幸存者面板")
     
+    # 报错提示
+    if st.session_state.image_error:
+        st.error(f"⚠️ {st.session_state.image_error}")
+        st.divider()
+
     # 状态显示
     col1, col2 = st.columns([1, 3])
     with col1: st.write("❤️")
@@ -50,83 +121,88 @@ with st.sidebar:
         st.info(item)
     
     st.divider()
-    # 图片尺寸调节滑块
-    st.session_state.image_width = st.slider(
-        "图片显示宽度 (px)",
-        min_value=200,
-        max_value=1000,
-        value=st.session_state.image_width,
-        step=50
-    )
     
+    # ✨✨✨ 云存档区域 ✨✨✨
+    st.subheader("☁️ 云端同步")
+    # 让用户输入名字，这样不同的人可以存不同的档
+    st.session_state.username = st.text_input("你的ID (区分大小写)", value=st.session_state.username)
+    
+    col_save, col_load = st.columns(2)
+    with col_save:
+        if st.button("⬆️ 上传存档"): save_game_cloud()
+    with col_load:
+        if st.button("⬇️ 下载存档"): load_game_cloud()
+    # ✨✨✨✨✨✨✨✨✨✨
+
     st.divider()
+    st.session_state.image_width = st.slider("图片宽度", 200, 1000, st.session_state.image_width, 50)
+    
     if st.button("🔄 重置游戏"):
         st.session_state.hp = 100
         st.session_state.inventory = ["破旧的衣服", "半瓶水"]
-        st.session_state.history = [] 
+        st.session_state.history = []
+        st.session_state.objective = "寻找线索"
+        st.session_state.image_error = None
         st.rerun()
 
-# --- 4. 游戏引擎 Prompt (快节奏爽文版) ---
+# --- 5. 游戏引擎 Prompt (不变) ---
 SYSTEM_PROMPT = f"""
-你是一个【丧尸末日文字冒险游戏】的上帝（DM）。
-玩家是一个刚刚苏醒的幸存者。
+你是一个【快节奏丧尸末日文字冒险游戏】的上帝（DM）。
+玩家是一个幸存者。
 
-【当前玩家状态】：
+【当前数据】：
 - 血量：{st.session_state.hp}
 - 背包：{','.join(st.session_state.inventory)}
+- 任务：{st.session_state.objective}
 
-【剧情节奏控制 (至关重要！！！)】：
-1. **拒绝拖沓**：不要把一个动作拆解成多个步骤。如果玩家说“搜刮房子”，直接告诉他搜到了什么，或者搜刮时遇到了什么突发危险，不要问“你要先搜厨房还是厕所”。
-2. **立即结算结果**：玩家做出选择后，立刻描述该行动的最终结果（成功或失败），并**立刻推进到下一个危机或事件**。
-3. **危机感**：每一轮回复都要推动剧情发展，不要停留在原地。
+【回复规则】：
+1. **剧情推进**：拒绝拖沓，立即结算玩家动作后果。
+2. **任务系统**：关注任务目标，完成后立刻更新新任务。
+3. **格式规范**：
+   - 第一段：剧情 (结果 + 新危机)
+   - 第二段：**【你会怎么做？】** (3个选项)
+   - 第三段：暗号区域
 
-【回复格式规范】：
-1. **第一段：剧情推进 (结果 + 新危机)**
-   直接描述玩家行动的后果，然后立刻引出新的环境或威胁。
-   
-2. **第二段：行动选项 (必须紧接在剧情后面)**
-   另起一行，加粗写：**【你会怎么做？】**
-   列出 3 个选项。选项跨度要大（例如：1.正面硬刚 2.转身逃跑 3.利用环境陷阱），不要出那种“先迈左脚还是右脚”的无聊选项。
+【暗号区域格式】：
+`||| 血量 ||| 物品列表 ||| 新的任务目标`
+`[IMAGE_PROMPT: 图片描述]`
 
-3. **第三段：暗号区域**
-   - 状态更新：`||| 血量数值 ||| 物品1,物品2`
-   - 图片生成：`[IMAGE_PROMPT: 画面描述]` (只在场景大变时生成)
-
-【示例】：
-玩家：我冲过去用斧头砍丧尸。
-(错误回复)：你举起了斧头，瞄准了丧尸。你要砍头还是砍腿？
-(正确回复)：
-你一斧头劈开了丧尸的脑袋，黑血溅了一地。但巨大的动静引来了街角的尸潮，几十只丧尸正疯狂涌来！你发现旁边有一辆没熄火的摩托车。
+【例子】：
+炸弹轰然爆炸，铁门飞了出去！你冲出烟雾，终于呼吸到了外面的空气。但你发现医院外是是更加危险的市中心广场，四周全是游荡的尸潮。你看到广场中央有一辆完好的警车。
 
 **【你会怎么做？】**
-1. 骑上摩托车飙车逃离。
-2. 躲进旁边的小巷子里。
-3. 捡起丧尸身上的手雷扔过去。
+1. 潜行穿过尸潮去抢警车。
+2. 爬上旁边的雕像暂避锋芒。
+3. 寻找下水道入口。
 
-[IMAGE_PROMPT: 尸潮涌动，主角满身是血，旁边有一辆摩托车]
-||| 98 ||| 斧头,搜刮到的压缩饼干
+[IMAGE_PROMPT: 破败的市中心广场，密密麻麻的丧尸，远处有一辆警车]
+||| 90 ||| 枪,绷带 ||| 到达警车并逃离市中心
 """
 
-# --- 5. 辅助函数 ---
-
+# --- 6. 辅助函数 (不变) ---
 def generate_dalle_image(prompt):
-    """调用 DALL-E 3 画图"""
     try:
-        with st.spinner("🎨 正在渲染场景图片..."):
+        with st.spinner("🎨 正在尝试绘制场景..."):
             response = client_image.images.generate(
                 model="dall-e-3",
                 prompt=prompt + ", apocalyptic style, cinematic lighting, 4k",
                 size="1024x1024", 
-                quality="standard",
+                quality="standard", 
                 n=1,
             )
+            if st.session_state.image_error is not None:
+                st.session_state.image_error = None
+                st.rerun()
             return response.data[0].url
     except Exception as e:
-        st.warning(f"图片生成失败: {e}")
+        error_msg = str(e)
+        if "402" in error_msg or "billing" in error_msg.lower():
+            st.session_state.image_error = "图片生成余额不足，已转为文字模式。"
+        else:
+            st.session_state.image_error = f"图片生成不可用。"
         return None
 
 def process_ai_response(messages):
-    """处理 AI 回复"""
     try:
         response = client_story.chat.completions.create(
             model="deepseek-chat",
@@ -134,38 +210,39 @@ def process_ai_response(messages):
             temperature=1.3, 
         )
         raw_reply = response.choices[0].message.content
-        
         story_text = raw_reply
         image_url = None
 
-        # 1. 解析图片暗号
         img_match = re.search(r'\[IMAGE_PROMPT:\s*(.*?)]', story_text)
         if img_match:
             prompt = img_match.group(1)
             story_text = story_text.replace(img_match.group(0), "").strip()
             image_url = generate_dalle_image(prompt)
         
-        # 2. 解析状态暗号
         if "|||" in story_text:
             parts = story_text.split("|||")
             story_text = parts[0].strip()
             try:
                 st.session_state.hp = int(parts[1].strip())
-                new_inv = parts[2].strip()
-                st.session_state.inventory = [i.strip() for i in new_inv.split(",") if i.strip()]
+                st.session_state.inventory = [i.strip() for i in parts[2].strip().split(",") if i.strip()]
+                if len(parts) > 3:
+                    new_obj = parts[3].strip()
+                    if new_obj and new_obj != st.session_state.objective:
+                        st.session_state.objective = new_obj
+                        st.toast(f"🚩 任务更新：{new_obj}")
             except: pass
             
         return story_text, image_url
     except Exception as e:
-        st.error(f"API Error: {e}")
+        st.error(f"DeepSeek Error: {e}")
         return None, None
 
-# --- 6. 自动开场逻辑 ---
+# --- 7. 自动开场 ---
 if len(st.session_state.history) == 0:
-    with st.spinner("正在生成随机开场..."):
+    with st.spinner("正在初始化世界..."):
         opening_msg = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": "游戏开始。请生成一个高危的出生点，并给出第一轮选项。"}
+            {"role": "user", "content": "游戏开始。生成随机高危出生点，设定初始任务。"}
         ]
         text, img = process_ai_response(opening_msg)
         if text:
@@ -174,10 +251,10 @@ if len(st.session_state.history) == 0:
             st.session_state.history.append(entry)
             st.rerun()
 
-# --- 7. 界面渲染 ---
-st.title("🎬 无限末日：求生之路")
+# --- 8. 界面渲染 ---
+st.title("☁️ 无限末日：云存档版")
+st.info(f"🚩 **当前目标：{st.session_state.objective}**")
 
-# 渲染历史消息
 for msg in st.session_state.history:
     if msg["role"] == "user":
         with st.chat_message("user"):
@@ -185,26 +262,23 @@ for msg in st.session_state.history:
     else:
         with st.chat_message("assistant"):
             st.write(msg["content"]) 
-            if "image_url" in msg:
+            if "image_url" in msg and msg["image_url"]:
                 st.image(msg["image_url"], caption="当前场景", width=st.session_state.image_width)
 
-# 死亡判定
 if st.session_state.hp <= 0:
     st.error("💀 你的视线逐渐变黑... 游戏结束。")
     if st.button("☠️ 投胎重开"):
         st.session_state.hp = 100
         st.session_state.history = []
+        st.session_state.image_error = None
         st.rerun()
     st.stop()
 
-# 玩家输入
-if user_input := st.chat_input("输入你的选择（如：1 / 搜刮便利店）..."):
-    # 显示玩家输入
+if user_input := st.chat_input("输入你的选择..."):
     st.session_state.history.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.write(user_input)
     
-    # 生成 AI 回复
     with st.chat_message("assistant"):
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         for m in st.session_state.history[-6:]:
@@ -221,4 +295,3 @@ if user_input := st.chat_input("输入你的选择（如：1 / 搜刮便利店�
             
             st.session_state.history.append(entry)
             st.rerun()
-
