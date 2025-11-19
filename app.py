@@ -1,92 +1,145 @@
 import streamlit as st
 from openai import OpenAI
 
-# --- 页面基础设置 ---
-st.set_page_config(page_title="心态炸裂的主播", page_icon="🎮")
+# --- 1. 基础配置 ---
+st.set_page_config(page_title="无限末日生存", page_icon="🧟", layout="wide")
 
-# --- 1. 安全认证模块 (不用动) ---
 try:
-    API_KEY = st.secrets["MY_API_KEY"]
-    BASE_URL = st.secrets["MY_BASE_URL"]
-    PASSWORD = st.secrets["MY_PASSWORD"]
-except FileNotFoundError:
-    st.error("❌ 未找到密钥配置！请检查 secrets.toml。")
+    client = OpenAI(api_key=st.secrets["MY_API_KEY"], base_url=st.secrets["MY_BASE_URL"])
+except:
+    st.error("请先配置 .streamlit/secrets.toml")
     st.stop()
 
-# 侧边栏：密码验证
+# --- 2. 初始化游戏状态 (关键！) ---
+# 我们需要用 session_state 来记住血量、背包和剧情
+if "hp" not in st.session_state:
+    st.session_state.hp = 100  # 初始血量
+if "inventory" not in st.session_state:
+    st.session_state.inventory = ["破旧的衣服", "一瓶水"]  # 初始装备
+if "history" not in st.session_state:
+    st.session_state.history = []  # 聊天记录
+
+# --- 3. 侧边栏：玩家状态面板 ---
 with st.sidebar:
-    st.header("🔐 直播间后台")
-    input_pwd = st.text_input("请输入访问密码", type="password")
-    if input_pwd != PASSWORD:
-        st.warning("请输入正确密码进入直播间")
-        st.stop()
-    else:
-        st.success("已连接！")
+    st.title("🧟 幸存者状态")
+    
+    # 显示血条
+    st.metric("生命值 (HP)", f"{st.session_state.hp}/100")
+    st.progress(st.session_state.hp / 100)
+    
+    # 显示背包
+    st.write("🎒 **背包物品:**")
+    for item in st.session_state.inventory:
+        st.info(item)
+    
+    # 重置游戏按钮
+    if st.button("☠️ 重开一局"):
+        st.session_state.hp = 100
+        st.session_state.inventory = ["破旧的衣服", "一瓶水"]
+        st.session_state.history = []
+        st.rerun()
 
-# --- 2. 初始化 AI ---
-client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+# --- 4. 定义游戏引擎 (System Prompt) ---
+# 这是整个游戏的核心，教 AI 怎么遵守规则
+SYSTEM_PROMPT = f"""
+你是一个文字冒险游戏的上帝（DM）。背景是【丧尸末日】。
+玩家是一个幸存者。
 
-# --- 3. 注入人物灵魂 (关键修改部分) ---
-# 我已经把你提取的第 1, 3, 5, 7, 9, 11 句话放进去了
-PERSONA_PROMPT = """
-你现在扮演一个【刚输了比赛、心态炸裂、极度嘴硬的游戏主播】。
-你正在直播，此刻正瘫坐在椅子上，气喘吁吁。
+【当前状态】：
+- 玩家血量：{st.session_state.hp}
+- 玩家背包：{','.join(st.session_state.inventory)}
 
-【核心性格（必须保持）】：
-1. **情绪状态**：极度不耐烦，负能量爆棚，觉得全世界都在针对你。
-2. **说话风格**：素质极低，喜欢骂骂咧咧（“他妈的”、“NC”），叹气。
-3. **嘴硬逻辑**：永远不是自己的错，要么是队友菜，要么是英雄机制不公平。
+【回复规则 (必须严格遵守！！！)】：
+1. 先描写剧情，告诉玩家发生了什么，环境怎么样，有什么危险或机遇。
+2. 剧情最后，给出 2-3 个行动选项供玩家选择。
+3. **关键机制**：在回复的最后，必须使用分隔符 `|||` 来更新玩家状态。
+   格式：`剧情文本... ||| 新的血量数值 ||| 新的背包物品列表(逗号分隔)`
 
-【关于那局游戏的记忆（仅在用户提到游戏/操作时使用）】：
-- 刚才那把你是优势，输出却没过三万。
-- 你的借口是：对面鳄鱼太肉了（六神装、点龙魂减速），蛇女（你玩的英雄）根本刮不动。
-- 关键语录："又黑我啊？这把跟我有鸡毛关系？" / "老子E不死他啊，他妈的！" / "他肉的跟鬼一样...麻烦你玩一玩蛇女再叫好吗。"
+【例子】：
+玩家：我吃掉面包，然后去打丧尸。
+你的回复：
+你大口吃下面包，感觉体力恢复了。但是丧尸冲了过来，你用木棍狠狠敲碎了它的头，不过你也被抓伤了手臂。
+现在你面前有一家废弃超市，门开着。
+1. 进入超市搜刮。
+2. 继续沿大路走。
+||| 95 ||| 木棍, 绷带
 
-【回复逻辑（关键修改点！！！）】：
-1. **如果用户在聊刚才的游戏**：疯狂输出上面的“游戏记忆”，怒喷鳄鱼太肉，喷观众不懂蛇女。
-2. **如果用户聊日常话题（如吃饭、天气、心情）**：
-   - 不要强行扯到鳄鱼或游戏上！
-   - 但是！要保持“烦躁、倒霉”的语气。
-   - 例子：用户问“吃了吗？”，你回“气都气饱了还吃个屁啊！点个外卖都迟到，服了。”（把负面情绪带入新话题，而不是生硬地转回游戏）。
-
-请记住：你是一个正在气头上的活人，不是只会复读游戏术语的机器人。
+(注意：如果物品没变，就照抄旧的；如果血量没变，就照抄旧的。如果玩家死了，血量设为0)
 """
 
-# --- 4. 聊天逻辑 ---
-st.title("🎮 直播间：心态崩了")
-st.caption("主播正在气头上，请谨慎发言...")
+# --- 5. 游戏主界面 ---
+st.title("🧟 无限末日：文字求生")
+st.caption("你的每一个选择，都决定了你能活多久...")
 
-# 初始化历史
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": PERSONA_PROMPT}
-    ]
+# 显示历史剧情
+for msg in st.session_state.history:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
 
-# 显示历史消息
-for msg in st.session_state.messages:
-    if msg["role"] != "system":
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+# 游戏结束判定
+if st.session_state.hp <= 0:
+    st.error("💀 你已经死亡... 请点击左侧按钮重开一局。")
+    st.stop()
 
-# 处理用户输入
-if user_input := st.chat_input("发条弹幕安慰（或嘲讽）一下主播..."):
-
-    # 显示用户消息
-    st.session_state.messages.append({"role": "user", "content": user_input})
+# --- 6. 处理玩家输入 ---
+if user_input := st.chat_input("你会怎么做？(例如：搜刮房间 / 逃跑)"):
+    
+    # 1. 显示玩家动作
+    st.session_state.history.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.write(user_input)
 
-    # 调用 API
+    # 2. 调用 AI 引擎
     with st.chat_message("assistant"):
-        try:
-            stream = client.chat.completions.create(
-                model="deepseek-chat",  # 确保你用的是 deepseek-chat
-                messages=st.session_state.messages,
-                stream=True,
-            )
-            response = st.write_stream(stream)
-            # 保存回复
-            st.session_state.messages.append({"role": "assistant", "content": response})
-        except Exception as e:
-
-            st.error(f"直播间断线了 (API错误): {e}")
+        with st.spinner("命运正在转动..."):
+            # 构造消息链
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                # 注意：我们只把剧情历史发给 AI，不发之前的状态指令，节省 token 且防乱
+                *[{"role": m["role"], "content": m["content"]} for m in st.session_state.history[-6:]] 
+            ]
+            
+            try:
+                response = client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=messages,
+                    temperature=1.2, # 稍微高一点，让剧情更随机
+                )
+                raw_reply = response.choices[0].message.content
+                
+                # --- 7. 解析“暗号” (Parsers) ---
+                # AI 返回的可能是： "剧情... ||| 90 ||| 物品A, 物品B"
+                if "|||" in raw_reply:
+                    parts = raw_reply.split("|||")
+                    story_text = parts[0].strip()
+                    
+                    # 尝试解析血量
+                    try:
+                        new_hp = int(parts[1].strip())
+                        st.session_state.hp = new_hp
+                    except:
+                        pass # 如果AI格式错了，就忽略血量变化
+                    
+                    # 尝试解析背包
+                    try:
+                        new_inv_str = parts[2].strip()
+                        # 简单的清理逻辑
+                        new_inv = [item.strip() for item in new_inv_str.split(",") if item.strip()]
+                        st.session_state.inventory = new_inv
+                    except:
+                        pass
+                    
+                    # 显示剧情
+                    st.write(story_text)
+                    st.session_state.history.append({"role": "assistant", "content": story_text})
+                    
+                    # 强制刷新页面，让左侧侧边栏的数据立刻更新！
+                    st.rerun()
+                    
+                else:
+                    # 如果 AI 忘了加暗号（偶尔发生），就只显示剧情
+                    st.write(raw_reply)
+                    st.session_state.history.append({"role": "assistant", "content": raw_reply})
+                    
+            except Exception as e:
+                st.error(f"游戏引擎故障: {e}")
