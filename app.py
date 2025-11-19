@@ -1,8 +1,8 @@
 import streamlit as st
 import re
-import json # 虽然不用存文件了，但有时候处理数据还需要
+import json 
 from openai import OpenAI
-import pymongo # 引入数据库库
+import pymongo 
 import certifi
 
 # --- 1. 基础配置 ---
@@ -18,18 +18,19 @@ try:
         api_key=st.secrets["AIHUBMIX_API_KEY"], 
         base_url=st.secrets["AIHUBMIX_BASE_URL"]
     )
-    # ✨ 连接 MongoDB
+    
+    # ✨ 连接 MongoDB (终极防报错版)
     @st.cache_resource
     def init_connection():
         return pymongo.MongoClient(
             st.secrets["MONGO_URI"],
-            tlsCAFile=certifi.where()  # <--- 关键修改：强制指定证书路径
+            tls=True,
+            tlsAllowInvalidCertificates=True 
         )
     
     mongo_client = init_connection()
-    # 选择数据库和集合
-    db = mongo_client.zombie_game  # 数据库名叫 zombie_game
-    saves_collection = db.player_saves # 集合(表)名叫 player_saves
+    db = mongo_client.zombie_game 
+    saves_collection = db.player_saves 
 
 except Exception as e:
     st.error(f"配置错误: {e}")
@@ -48,11 +49,10 @@ if "objective" not in st.session_state:
     st.session_state.objective = "寻找线索"
 if "image_error" not in st.session_state:
     st.session_state.image_error = None
-# ✨ 新增：当前玩家名字
 if "username" not in st.session_state:
     st.session_state.username = "Player1"
 
-# --- 3. 云存档/读档系统 (核心修改) ---
+# --- 3. 云存档/读档系统 ---
 
 def save_game_cloud():
     user = st.session_state.username
@@ -60,9 +60,8 @@ def save_game_cloud():
         st.error("❌ 请先输入用户名！")
         return
 
-    # 准备要保存的数据 (这就是一个文档)
     data = {
-        "username": user,  # 作为唯一标识
+        "username": user,
         "hp": st.session_state.hp,
         "inventory": st.session_state.inventory,
         "history": st.session_state.history,
@@ -70,11 +69,10 @@ def save_game_cloud():
     }
     
     try:
-        # ✨ update_one: 如果存在就更新，不存在就插入 (Upsert)
         saves_collection.update_one(
-            {"username": user},  # 查询条件：找名字叫这个的
-            {"$set": data},      # 更新内容
-            upsert=True          # 如果没找到，就创建新的
+            {"username": user}, 
+            {"$set": data},     
+            upsert=True         
         )
         st.toast(f"☁️ 成功保存到云端！(用户: {user})")
     except Exception as e:
@@ -87,7 +85,6 @@ def load_game_cloud():
         return
 
     try:
-        # ✨ find_one: 去数据库里找
         data = saves_collection.find_one({"username": user})
         
         if data:
@@ -98,14 +95,20 @@ def load_game_cloud():
             st.toast(f"☁️ 云存档读取成功！欢迎回来，{user}")
             st.rerun()
         else:
-            st.error(f"❌ 云端找不到用户 [{user}] 的存档，请检查拼写。")
+            st.error(f"❌ 云端找不到用户 [{user}] 的存档。")
     except Exception as e:
         st.error(f"读取失败: {e}")
 
-# --- 4. 侧边栏 UI ---
+# --- 4. 侧边栏 UI (界面调整核心区域) ---
 with st.sidebar:
     st.title("🧟 幸存者面板")
     
+    # ✨✨✨ 修改点：把任务目标移到最上方 ✨✨✨
+    st.caption("当前任务目标：")
+    st.warning(f"🚩 **{st.session_state.objective}**")
+    st.divider()
+    # ✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨✨
+
     # 报错提示
     if st.session_state.image_error:
         st.error(f"⚠️ {st.session_state.image_error}")
@@ -126,9 +129,8 @@ with st.sidebar:
     
     st.divider()
     
-    # ✨✨✨ 云存档区域 ✨✨✨
+    # 云存档区域
     st.subheader("☁️ 云端同步")
-    # 让用户输入名字，这样不同的人可以存不同的档
     st.session_state.username = st.text_input("你的ID (区分大小写)", value=st.session_state.username)
     
     col_save, col_load = st.columns(2)
@@ -136,7 +138,6 @@ with st.sidebar:
         if st.button("⬆️ 上传存档"): save_game_cloud()
     with col_load:
         if st.button("⬇️ 下载存档"): load_game_cloud()
-    # ✨✨✨✨✨✨✨✨✨✨
 
     st.divider()
     st.session_state.image_width = st.slider("图片宽度", 200, 1000, st.session_state.image_width, 50)
@@ -149,7 +150,7 @@ with st.sidebar:
         st.session_state.image_error = None
         st.rerun()
 
-# --- 5. 游戏引擎 Prompt (不变) ---
+# --- 5. 游戏引擎 Prompt ---
 SYSTEM_PROMPT = f"""
 你是一个【快节奏丧尸末日文字冒险游戏】的上帝（DM）。
 玩家是一个幸存者。
@@ -183,7 +184,7 @@ SYSTEM_PROMPT = f"""
 ||| 90 ||| 枪,绷带 ||| 到达警车并逃离市中心
 """
 
-# --- 6. 辅助函数 (不变) ---
+# --- 6. 辅助函数 ---
 def generate_dalle_image(prompt):
     try:
         with st.spinner("🎨 正在尝试绘制场景..."):
@@ -257,7 +258,7 @@ if len(st.session_state.history) == 0:
 
 # --- 8. 界面渲染 ---
 st.title("☁️ 无限末日：云存档版")
-st.info(f"🚩 **当前目标：{st.session_state.objective}**")
+# ❌ 删除了这里原来的 st.info(当前目标)
 
 for msg in st.session_state.history:
     if msg["role"] == "user":
@@ -299,4 +300,3 @@ if user_input := st.chat_input("输入你的选择..."):
             
             st.session_state.history.append(entry)
             st.rerun()
-
