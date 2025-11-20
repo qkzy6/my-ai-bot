@@ -204,13 +204,15 @@ def generate_dalle_image(prompt):
             # 如果成功，清除报错状态
             if st.session_state.image_error: st.session_state.image_error = None; st.rerun()
             return response.data[0].url
+    # 找到 generate_dalle_image 函数中的 except 部分
     except Exception as e:
+        # --- 修改开始 ---
+        # 不要只写中文提示，把具体的 {e} 打印出来！
         error_msg = str(e)
-        if "402" in error_msg or "billing" in error_msg.lower():
-            st.session_state.image_error = "图片生成余额不足，已转为文字模式。"
-        else:
-            st.session_state.image_error = "画圣暂时闭关(API不可用)。"
+        st.session_state.image_error = f"画圣报错: {error_msg}" 
+        print(f"后台报错详情: {error_msg}") # 这会在你运行代码的黑框框里打印
         return None
+        # --- 修改结束 ---
 
 def process_ai_response(messages):
     try:
@@ -299,3 +301,4 @@ if user_input := st.chat_input("道友请抉择..."):
                 entry["image_url"] = img
             st.session_state.history.append(entry)
             st.rerun()
+
