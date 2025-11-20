@@ -198,21 +198,23 @@ def generate_dalle_image(prompt):
         with st.spinner("🎨 画圣正在挥毫泼墨..."):
             response = client_image.images.generate(
                 model="dall-e-3",
-                prompt=prompt + ", ancient chinese fantasy art, ink wash painting, ethereal, detailed",
+                # 强制在 prompt 后加一些“安全词”
+                prompt=prompt + ", ancient chinese fantasy art, ink wash painting, ethereal, no gore, no blood",
                 size="1024x1024", quality="standard", n=1,
             )
-            # 如果成功，清除报错状态
             if st.session_state.image_error: st.session_state.image_error = None; st.rerun()
             return response.data[0].url
-    # 找到 generate_dalle_image 函数中的 except 部分
     except Exception as e:
-        # --- 修改开始 ---
-        # 不要只写中文提示，把具体的 {e} 打印出来！
         error_msg = str(e)
-        st.session_state.image_error = f"画圣报错: {error_msg}" 
-        print(f"后台报错详情: {error_msg}") # 这会在你运行代码的黑框框里打印
+        # 专门捕捉“安全系统拒绝”的错误
+        if "safety system" in error_msg or "content_policy_violation" in error_msg:
+            st.session_state.image_error = "⚠️ 图片因画面过于血腥/暴力被系统拦截，已转为文字模式。"
+            print(f"拦截详情: {error_msg}") # 后台打印详情
+        elif "402" in error_msg or "billing" in error_msg.lower():
+            st.session_state.image_error = "图片生成余额不足。"
+        else:
+            st.session_state.image_error = f"画圣报错: {error_msg}"
         return None
-        # --- 修改结束 ---
 
 def process_ai_response(messages):
     try:
@@ -301,4 +303,5 @@ if user_input := st.chat_input("道友请抉择..."):
                 entry["image_url"] = img
             st.session_state.history.append(entry)
             st.rerun()
+
 
